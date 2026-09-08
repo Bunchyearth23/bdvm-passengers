@@ -12,6 +12,8 @@
 | Standalone install | Not yet |
 | Current runtime host | `BDVM.Full` |
 
+The domain itself has no Passenger Jobs dependency. The current playable workflow observes real Passenger Jobs missions through the separate, non-standalone `BDVM.PassengerJobsBridge` module.
+
 ## Responsibilities
 
 - Represent route demand, service windows, capacity and economic value.
@@ -27,11 +29,11 @@
 
 ## Boundaries
 
-Passengers does not spawn coaches, own railway assets, calculate company balances or complete a mission by itself. Fleet handles equipment, Companies handles money, and Operations handles assignments and completion ports. The module is optional: freight operations can exist without it.
+Passengers does not spawn coaches, own railway assets, calculate company balances or complete a mission by itself. Fleet handles equipment, Companies handles money, Operations handles assignments and completion ports, and `BDVM.PassengerJobsBridge` adapts the external Passenger Jobs lifecycle. The module is optional: freight operations can exist without it.
 
 ## Dependencies and composition
 
-The project references `BDVM.Common` and `BDVM.Operations`. Its `Domain/` files remain in this repository but are currently linked into `BDVM.Full`; the standalone DLL only carries the module marker until independent packaging is completed.
+The project references `BDVM.Common` and `BDVM.Operations`. It intentionally does not reference Passenger Jobs. The current runtime composition adds `BDVM.PassengerJobsBridge`, which requires Passenger Jobs and its transitive DVLangHelper dependency. `Domain/` remains in this repository but is currently linked into `BDVM.Full`; the standalone DLL only carries the module marker until independent packaging is completed.
 
 ## Build
 
@@ -45,7 +47,7 @@ Build `BDVM.Full` to include the passenger domain in the present game runtime.
 
 ## Testing and installation
 
-The domain validation suite exercises demand limits, reservation conflicts, lifecycle transitions and integration with mission assignments. There is no standalone Unity Mod Manager package yet. In-game testing uses the matching `BDVM.Full` build.
+The domain validation suite exercises demand limits, reservation conflicts, lifecycle transitions and integration with mission assignments. There is no standalone Unity Mod Manager package yet. In-game passenger testing uses matching builds of `BDVM.Full`, `BDVM.PassengerJobsBridge` and Passenger Jobs.
 
 ## Compatibility
 
