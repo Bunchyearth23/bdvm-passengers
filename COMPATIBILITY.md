@@ -7,7 +7,7 @@ This file is the published compatibility contract for **BDVM.Passengers 1.0.0**.
 | Surface | Accepted line | Refusal behavior |
 | --- | --- | --- |
 | Module API | 1.x | An older or newer major is refused before registration. |
-| Checkpoint | `bdvm.checkpoint` schema 2 | Unknown schemas and legacy DVCompany packages are refused without mutation. |
+| Checkpoint | `bdvm.checkpoint` schema 2 | Unknown schemas and unsupported legacy packages are refused without mutation. |
 | Web API | 1.0 when applicable | An incompatible web module is disabled without stopping the host or other modules. |
 | External runtime dependencies | None | A missing optional runtime disables only the dependent bridge or feature. |
 
@@ -26,4 +26,3 @@ This release is selected by these dependency-closed profiles: **minimal, economi
 | Older major | Refuse before registration and leave authoritative state untouched. |
 
 Game, save/reload and host/client behavior still requires the release's documented manual runtime campaign. Repository CI validates this contract and metadata; it does not claim Unity runtime validation.
-

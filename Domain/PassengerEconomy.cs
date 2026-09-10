@@ -81,7 +81,7 @@ public sealed class PassengerEconomyEngine
     {
         lock (gate)
         {
-            RequireHost(); var fingerprint = "demand|" + routeId + "|" + currentTick; var replay = Command(commandId, fingerprint); if (replay != null) return state.PassengerRoutes.Single(x => x.RouteId == replay.AssignmentId);
+            RequireHost(); var fingerprint = "demand|" + routeId; var replay = Command(commandId, fingerprint); if (replay != null) return state.PassengerRoutes.Single(x => x.RouteId == replay.AssignmentId);
             var route = state.PassengerRoutes.Single(x => x.RouteId == routeId); if (currentTick < route.DemandUpdatedTick) throw new InvalidOperationException("Passenger demand clock cannot move backwards.");
             var intervals = (currentTick - route.DemandUpdatedTick) / route.DesiredFrequencyTicks;
             if (intervals > 0) { var growth = checked(intervals * route.DemandPerInterval); route.DemandUnits = (int)Math.Min(route.MaximumDemandUnits, route.DemandUnits + growth); route.DemandUpdatedTick = checked(route.DemandUpdatedTick + intervals * route.DesiredFrequencyTicks); route.Version++; }
@@ -94,7 +94,9 @@ public sealed class PassengerEconomyEngine
     {
         lock (gate)
         {
-            RequireHost(); var fingerprint = string.Join("|", requesterId, contractId, routeId, passengerJobId, string.Join(",", assetIds ?? Array.Empty<string>()), operatorRef?.Key, capacity, departureTick, arrivalTick);
+            var plannedDuration = checked(arrivalTick - departureTick);
+            var requestedAssets = (assetIds ?? Array.Empty<string>()).Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal).ToArray();
+            RequireHost(); var fingerprint = string.Join("|", requesterId, contractId, routeId, passengerJobId, string.Join(",", requestedAssets), operatorRef?.Key, capacity, plannedDuration);
             var replay = Command(commandId, fingerprint); if (replay != null) return state.PassengerContracts.Single(x => x.ContractId == replay.AssignmentId);
             if (string.IsNullOrWhiteSpace(contractId) || string.IsNullOrWhiteSpace(passengerJobId) || assetIds == null || assetIds.Count == 0 || operatorRef == null || capacity <= 0 || departureTick < state.LeaseClock.ActiveTick || arrivalTick <= departureTick) throw new ArgumentException("Invalid passenger service offer.");
             if (state.PassengerContracts.Any(x => x.ContractId == contractId)) throw new InvalidOperationException("Passenger contract identity already exists.");
@@ -113,23 +115,33 @@ public sealed class PassengerEconomyEngine
     {
         lock (gate)
         {
-            RequireHost(); var fingerprint = string.Join("|", requesterId, contractId, vanillaBalance, actualDepartureTick, "start"); var replay = Command(commandId, fingerprint); if (replay != null) return state.PassengerContracts.Single(x => x.ContractId == replay.AssignmentId);
+            RequireHost(); var fingerprint = string.Join("|", requesterId, contractId, "start"); var replay = Command(commandId, fingerprint); if (replay != null) return state.PassengerContracts.Single(x => x.ContractId == replay.AssignmentId);
             var contract = state.PassengerContracts.Single(x => x.ContractId == contractId); if (contract.State != PassengerContractState.Reserved || actualDepartureTick < 0) throw new InvalidOperationException("Passenger service is not startable.");
             new MissionAssignmentEngine(state, authority, completion).Start(commandId + ":assignment", requesterId, contract.AssignmentId, vanillaBalance);
             contract.ActualDepartureTick = actualDepartureTick; contract.State = PassengerContractState.Active; contract.ResultCode = "passenger-service-active"; contract.Version++; Record(commandId, fingerprint, contractId, contract.ResultCode); return contract;
         }
     }
 
-    public PassengerServiceContract Complete(string commandId, string requesterId, string contractId, long vanillaBalance, long actualArrivalTick, IReadOnlyList<string> arrivedAssetIds)
+    public PassengerServiceContract Complete(string commandId, string requesterId, string contractId, long vanillaBalance, long actualArrivalTick, IReadOnlyList<string> arrivedAssetIds,
+        MissionSettlementMode settlementMode = MissionSettlementMode.ExternalWalletIncludesRevenue)
     {
         lock (gate)
         {
-            RequireHost(); var arrived = arrivedAssetIds ?? Array.Empty<string>(); var fingerprint = string.Join("|", requesterId, contractId, vanillaBalance, actualArrivalTick, string.Join(",", arrived), "complete"); var replay = Command(commandId, fingerprint); if (replay != null) return state.PassengerContracts.Single(x => x.ContractId == replay.AssignmentId);
-            var contract = state.PassengerContracts.Single(x => x.ContractId == contractId); if (contract.State != PassengerContractState.Active && contract.State != PassengerContractState.CompletionPending) throw new InvalidOperationException("Passenger service is not active.");
-            var assignment = new MissionAssignmentEngine(state, authority, completion).Complete(commandId + ":assignment", requesterId, contract.AssignmentId, vanillaBalance, arrived);
-            if (assignment.State == MissionAssignmentState.CompletionPending) { contract.State = PassengerContractState.CompletionPending; contract.ResultCode = assignment.ResultCode; contract.Version++; Record(commandId, fingerprint, contractId, contract.ResultCode); return contract; }
-            contract.ActualArrivalTick = actualArrivalTick; ApplyFinancialAdjustment(contract, assignment); UpdateRoute(contract);
-            contract.State = PassengerContractState.Completed; contract.ResultCode = "passenger-service-completed"; contract.Version++; Record(commandId, fingerprint, contractId, contract.ResultCode); return contract;
+            RequireHost(); var arrived = (arrivedAssetIds ?? Array.Empty<string>()).Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal).ToArray(); var fingerprint = string.Join("|", requesterId, contractId, string.Join(",", arrived), "complete"); var replay = Command(commandId, fingerprint);
+            var contract = state.PassengerContracts.Single(x => x.ContractId == contractId);
+            if (replay != null && contract.State != PassengerContractState.CompletionPending) return contract;
+            if (contract.State != PassengerContractState.Active && contract.State != PassengerContractState.CompletionPending) throw new InvalidOperationException("Passenger service is not active.");
+            var assignment = new MissionAssignmentEngine(state, authority, completion).Complete(commandId + ":assignment", requesterId, contract.AssignmentId, vanillaBalance, arrived, settlementMode);
+            if (assignment.State == MissionAssignmentState.CompletionPending)
+            {
+                contract.State = PassengerContractState.CompletionPending; contract.ResultCode = assignment.ResultCode; contract.Version++;
+                if (replay == null) Record(commandId, fingerprint, contractId, contract.ResultCode); else replay.ResultCode = contract.ResultCode;
+                return contract;
+            }
+            contract.ActualArrivalTick = actualArrivalTick; ApplyFinancialAdjustment(contract, assignment, settlementMode); UpdateRoute(contract);
+            contract.State = PassengerContractState.Completed; contract.ResultCode = "passenger-service-completed"; contract.Version++;
+            if (replay == null) Record(commandId, fingerprint, contractId, contract.ResultCode); else replay.ResultCode = contract.ResultCode;
+            return contract;
         }
     }
 
@@ -145,18 +157,29 @@ public sealed class PassengerEconomyEngine
         }
     }
 
-    private void ApplyFinancialAdjustment(PassengerServiceContract contract, MissionAssignment assignment)
+    private void ApplyFinancialAdjustment(PassengerServiceContract contract, MissionAssignment assignment, MissionSettlementMode settlementMode)
     {
         if (contract.FinancialAdjustmentApplied) return;
         var observed = assignment.ActualRevenue; var lateTicks = Math.Max(0, contract.ActualArrivalTick!.Value - contract.ScheduledArrivalTick); var penalty = Math.Min(observed, checked(lateTicks * state.PassengerRoutes.Single(x => x.RouteId == contract.RouteId).LatePenaltyPerTick)); var paid = observed - penalty;
         var ledger = state.Economy.Ledger.SingleOrDefault(x => x.EntryId == assignment.AssignmentId + ":mission-revenue"); if (ledger != null) ledger.Amount = paid;
         if (assignment.Operator.Kind == AssetOwnerKind.Player)
         {
-            var wallet = state.Economy.Wallets.Single(x => x.Account.Key == "Player:" + assignment.Operator.OwnerId); var expected = checked(assignment.VanillaBalanceBefore + paid); wallet.Balance = expected; wallet.Version++; assignment.ExpectedVanillaBalance = expected; assignment.ExternalSettlement = expected == assignment.VanillaBalanceAfter ? ExternalSettlementState.NotRequired : ExternalSettlementState.Pending;
+            var wallet = state.Economy.Wallets.Single(x => x.Account.Key == "Player:" + assignment.Operator.OwnerId);
+            if (settlementMode == MissionSettlementMode.InternalWalletReceivesRevenue)
+            {
+                if (penalty > 0) { wallet.Balance = checked(wallet.Balance - penalty); wallet.Version++; }
+                assignment.ExpectedVanillaBalance = assignment.VanillaBalanceAfter;
+                assignment.ExternalSettlement = ExternalSettlementState.NotRequired;
+            }
+            else
+            {
+                var expected = checked(assignment.VanillaBalanceAfter - penalty); wallet.Balance = expected; wallet.Version++; assignment.ExpectedVanillaBalance = expected; assignment.ExternalSettlement = penalty == 0 ? ExternalSettlementState.NotRequired : ExternalSettlementState.Pending;
+            }
         }
         else
         {
             var wallet = state.Economy.Wallets.Single(x => x.Account.Key == "Company:" + assignment.Operator.OwnerId); if (penalty > 0) { wallet.Balance -= penalty; wallet.Version++; }
+            if (settlementMode == MissionSettlementMode.InternalWalletReceivesRevenue) assignment.ExternalSettlement = ExternalSettlementState.NotRequired;
         }
         assignment.ActualRevenue = paid; assignment.Version++; contract.ObservedVanillaRevenue = observed; contract.PunctualityPenalty = penalty; contract.PaidRevenue = paid; contract.FinancialAdjustmentApplied = true;
     }
