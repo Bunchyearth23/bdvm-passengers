@@ -1,1 +1,1 @@
-{"id":"BDVM.Passengers","version":"1.0.0","kind":"feature","dependencies":["BDVM.Common","BDVM.Operations"]}
+{"id":"BDVM.Passengers","displayName":"BDVM - Passengers","version":"1.0.0","kind":"feature","dependencies":["BDVM.Common","BDVM.Operations"]}
